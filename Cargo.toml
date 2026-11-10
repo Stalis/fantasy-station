@@ -1,0 +1,12 @@
+[package]
+name = "fantasy-station"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mlua = { version = "0.12.2", features = ["luajit"] }
+sdl3 = "0.22.1"
+
+[build-dependencies]
+shaderc = "0.10.1"
+spirv-cross2 = { version = "0.7.2", default-features = false, features = ["msl"] }
