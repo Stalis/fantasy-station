@@ -1,8 +1,6 @@
-mod disk;
-mod input;
-mod renderer;
-mod screen;
-mod script;
+mod core;
+mod gateway;
+mod lua;
 
 use std::env;
 use std::error::Error;
@@ -10,11 +8,12 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use disk::load_disk;
-use input::SharedInput;
-use renderer::Renderer;
-use screen::SharedScreen;
-use script::ScriptEngine;
+use core::disk::load_disk;
+use core::graphics::SharedScreen;
+use core::input::{self, SharedInput};
+use core::renderer::Renderer;
+use gateway::{Graphics, Input};
+use lua::ScriptEngine;
 use sdl3::event::Event;
 use sdl3::keyboard::Keycode;
 
@@ -31,7 +30,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let screen = SharedScreen::new();
     let input = SharedInput::default();
-    let engine = ScriptEngine::load(&script_path, screen.clone(), input.clone())?;
+    let engine = ScriptEngine::load(
+        &script_path,
+        Graphics::new(screen.clone()),
+        Input::new(input.clone()),
+    )?;
 
     let sdl_context = sdl3::init()?;
     let video_subsystem = sdl_context.video()?;
@@ -85,13 +88,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
+        screen.0.borrow_mut().begin_frame();
         engine.frame()?;
+        screen.0.borrow_mut().publish_frame();
         for player in input.0.borrow_mut().iter_mut() {
             player.end_frame();
         }
 
         // Render the completed frame.
-        renderer.render(&screen.0.borrow().buffer, classic_soft)?;
+        renderer.render(&screen.0.borrow(), classic_soft)?;
 
         let elapsed = frame_start.elapsed();
         if elapsed < TARGET_FRAME_DURATION {

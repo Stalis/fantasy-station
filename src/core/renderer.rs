@@ -8,8 +8,10 @@ use sdl3::gpu::{
 use sdl3::pixels::Color;
 use sdl3::video::Window;
 
-const WIDTH: u32 = super::SCREEN_WIDTH as u32;
-const HEIGHT: u32 = super::SCREEN_HEIGHT as u32;
+use crate::core::graphics::Screen;
+
+const WIDTH: u32 = crate::SCREEN_WIDTH as u32;
+const HEIGHT: u32 = crate::SCREEN_HEIGHT as u32;
 const BYTE_COUNT: u32 = WIDTH * HEIGHT * 4;
 
 #[cfg(target_os = "macos")]
@@ -135,13 +137,7 @@ impl Renderer {
         &mut self.claimed.window
     }
 
-    pub fn render(&mut self, framebuffer: &[Color], classic_soft: bool) -> Result<(), String> {
-        if framebuffer.len() != (WIDTH * HEIGHT) as usize {
-            return Err(format!(
-                "framebuffer must contain {} pixels",
-                WIDTH * HEIGHT
-            ));
-        }
+    pub fn render(&mut self, screen: &Screen, classic_soft: bool) -> Result<(), String> {
         let device = &self.claimed.device;
         // The safe SDL wrapper does not check whether mapping returned null.
         let mapped = unsafe {
@@ -152,8 +148,17 @@ impl Renderer {
         }
         let bytes =
             unsafe { std::slice::from_raw_parts_mut(mapped.cast::<u8>(), BYTE_COUNT as usize) };
-        for (dst, color) in bytes.chunks_exact_mut(4).zip(framebuffer) {
-            dst.copy_from_slice(&[color.r, color.g, color.b, color.a]);
+        for (dst, &pixel) in bytes
+            .chunks_exact_mut(4)
+            .zip(screen.displayed_rows().flatten())
+        {
+            let expand = |channel: u16| ((channel << 3) | (channel >> 2)) as u8;
+            dst.copy_from_slice(&[
+                expand((pixel >> 10) & 31),
+                expand((pixel >> 5) & 31),
+                expand(pixel & 31),
+                255,
+            ]);
         }
         unsafe { sdl3::sys::gpu::SDL_UnmapGPUTransferBuffer(device.raw(), self.transfer.raw()) };
 

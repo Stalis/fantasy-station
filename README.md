@@ -33,7 +33,7 @@ The goal is not to emulate PlayStation hardware. Instead, Fantasy Station define
 | Sound | Limited, deterministic virtual audio API (details TBD) |
 | Disk | Directory with a JSON manifest and game files |
 
-These figures describe the **virtual platform**, not the requirements or capabilities of the host computer. Memory layout, accounting rules, sprite/texture constraints, and the CPU cost model still need to be specified. Lua heap accounting may be distinct from virtual addressable RAM.
+These figures describe the **virtual platform**, not the requirements or capabilities of the host computer. The current VRAM layout and texture constraints are documented below; other memory accounting and the CPU cost model remain provisional. Lua heap accounting may be distinct from virtual addressable RAM.
 
 ## Display philosophy
 
@@ -88,7 +88,7 @@ Game (Lua) -> FS-1 2D API -> Virtual framebuffer (320x240)
 - **SDK / CLI:** proposed tools for creating, validating, and running disks.
 - **Disk:** a directory containing a JSON manifest and game files.
 
-The Rust source separates the application loop (`src/main.rs`), disk loading (`src/disk.rs`), screen state (`src/screen.rs`), Lua integration (`src/script/`), input state and SDL devices (`src/input/`), and GPU rendering (`src/renderer.rs`).
+The application loop (`src/main.rs`) composes virtual hardware and SDL host code (`src/core/`), the game-facing interface (`src/gateway/`), and Lua adapters (`src/lua/`).
 
 SDL3 and host GPU objects are implementation details, not part of the game-facing API.
 
@@ -149,6 +149,45 @@ graphics:line(x0, y0, x1, y1, 0x7fff)  -- Line including both endpoints.
 
 Rectangles with zero or negative width or height and circles with negative
 radius draw nothing; a circle with radius zero draws its center pixel.
+
+The console uses a single 960 × 480 RGB555 VRAM canvas. Two 320 × 240
+framebuffers are reserved; textures share the remaining space. A new texture is
+black and is placed in the first free rectangle in row-major order, without
+rotation or relocation. Fragmentation can prevent an allocation even if the
+total free area is large enough. Invalid dimensions or insufficient space raise
+a Lua error.
+
+The runtime automatically alternates framebuffers. `setup()` draws into the
+initial page; each frame starts with a copy of the previous contents, so
+`update()` and `draw()` share one target and can retain earlier pixels. A
+callback error does not publish its partial frame.
+
+```lua
+local atlas = graphics:new_texture(16, 16)
+atlas:fill(0x001f)
+atlas:rect(0, 0, 8, 8, 0x7c00)
+local sprite = atlas:sprite(0, 0, 8, 8)
+
+graphics:draw_sprite(sprite, 10, 10)
+graphics:rect_texture(30, 10, 32, 16, atlas, "stretch")
+graphics:circle_texture(90, 30, 20, atlas, "repeat")
+```
+
+Textures have read-only `width` and `height` and support the same `clear`,
+`fill`, `set_pixel`, `get_pixel`, `rect`, `circle`, and `line` operations as
+`graphics`, using texture-local coordinates. Textured rectangles and circles
+also work on textures. Their required mapping is `"stretch"` (nearest-neighbor
+over the unclipped bounding box) or `"repeat"` (tile from its unclipped
+origin). Sampling is opaque, with no filtering or blending. When source and
+destination overlap, sampling uses the source contents from before the call.
+
+`texture:sprite(x, y, width, height)` requires a positive rectangle entirely
+inside the texture. A sprite references the atlas rather than copying pixels:
+later atlas edits are visible, and the atlas allocation remains alive while
+either the texture or any of its sprites is referenced. `draw_sprite` copies
+the selected rectangle at its original size with destination clipping. Texture
+space becomes available again after the last reference is collected. Image
+loading is not implemented.
 
 ### Current input API
 
@@ -224,7 +263,7 @@ my-disk/
 }
 ```
 
-Both fields are required strings. `name` must not be empty; `entrypoint` is a path relative to the disk directory and must resolve inside it. Additional manifest fields are ignored for future expansion. The disk name appears in the window title. The runtime currently loads only the entrypoint; sprites, MIDI files, and other assets are planned, not yet supported.
+Both fields are required strings. `name` must not be empty; `entrypoint` is a path relative to the disk directory and must resolve inside it. Additional manifest fields are ignored for future expansion. The disk name appears in the window title. The runtime currently loads only the entrypoint; image, MIDI, and other asset loading is not yet supported.
 
 Disks are not sandboxed: only run Lua code from trusted sources.
 

@@ -1,19 +1,21 @@
 use mlua::{UserData, UserDataMethods};
 
-use crate::input::{Button, SharedInput};
+use crate::gateway::Input;
+
+pub(super) struct LuaInput(pub(super) Input);
 
 struct Controller {
-    input: SharedInput,
+    input: Input,
     slot: usize,
 }
 
-impl UserData for SharedInput {
+impl UserData for LuaInput {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("get_controller", |_, this, index: Option<i64>| {
             let index = index.unwrap_or(0);
             match index {
                 0 | 1 => Ok(Controller {
-                    input: this.clone(),
+                    input: this.0.clone(),
                     slot: index as usize,
                 }),
                 _ => Err(mlua::Error::RuntimeError(format!(
@@ -27,22 +29,19 @@ impl UserData for SharedInput {
 impl UserData for Controller {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("down", |_, this, name: String| {
-            let button = Button::parse(&name).ok_or_else(|| {
-                mlua::Error::RuntimeError(format!("unknown input button: {name}"))
-            })?;
-            Ok(this.input.0.borrow()[this.slot].down(button))
+            this.input
+                .down(this.slot, &name)
+                .ok_or_else(|| mlua::Error::RuntimeError(format!("unknown input button: {name}")))
         });
         methods.add_method("pressed", |_, this, name: String| {
-            let button = Button::parse(&name).ok_or_else(|| {
-                mlua::Error::RuntimeError(format!("unknown input button: {name}"))
-            })?;
-            Ok(this.input.0.borrow()[this.slot].pressed(button))
+            this.input
+                .pressed(this.slot, &name)
+                .ok_or_else(|| mlua::Error::RuntimeError(format!("unknown input button: {name}")))
         });
         methods.add_method("released", |_, this, name: String| {
-            let button = Button::parse(&name).ok_or_else(|| {
-                mlua::Error::RuntimeError(format!("unknown input button: {name}"))
-            })?;
-            Ok(this.input.0.borrow()[this.slot].released(button))
+            this.input
+                .released(this.slot, &name)
+                .ok_or_else(|| mlua::Error::RuntimeError(format!("unknown input button: {name}")))
         });
     }
 }

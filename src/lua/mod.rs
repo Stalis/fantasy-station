@@ -1,4 +1,8 @@
 mod controller;
+mod graphics;
+
+use controller::LuaInput;
+use graphics::LuaGraphics;
 
 use std::error::Error;
 use std::fs;
@@ -6,8 +10,7 @@ use std::path::Path;
 
 use mlua::{Function, Lua};
 
-use crate::input::SharedInput;
-use crate::screen::SharedScreen;
+use crate::gateway::{Graphics, Input};
 
 pub(crate) struct ScriptEngine {
     _lua: Lua,
@@ -20,12 +23,12 @@ impl ScriptEngine {
     pub(crate) fn from_source(
         script_source: &str,
         script_name: &str,
-        screen: SharedScreen,
-        input: SharedInput,
+        screen: Graphics,
+        input: Input,
     ) -> mlua::Result<Self> {
         let lua = Lua::new();
-        lua.globals().set("graphics", screen)?;
-        lua.globals().set("input", input)?;
+        lua.globals().set("graphics", LuaGraphics(screen))?;
+        lua.globals().set("input", LuaInput(input))?;
 
         lua.load(script_source).set_name(script_name).exec()?;
 
@@ -44,8 +47,8 @@ impl ScriptEngine {
 
     pub(crate) fn load(
         script_path: &Path,
-        screen: SharedScreen,
-        input: SharedInput,
+        screen: Graphics,
+        input: Input,
     ) -> Result<Self, Box<dyn Error>> {
         let script_source = fs::read_to_string(script_path).map_err(|err| {
             format!(
@@ -88,8 +91,9 @@ mod tests {
 
     use sdl3::pixels::Color;
 
-    use crate::disk::load_disk;
-    use crate::input::Button;
+    use crate::core::disk::load_disk;
+    use crate::core::graphics::SharedScreen;
+    use crate::core::input::{Button, SharedInput};
 
     #[test]
     fn disk_manifest_loads_entrypoint_and_rejects_invalid_paths() {
@@ -112,8 +116,12 @@ mod tests {
             script,
             fs::canonicalize(dir.join("scripts/start.lua")).unwrap()
         );
-        let engine =
-            ScriptEngine::load(&script, SharedScreen::new(), SharedInput::default()).unwrap();
+        let engine = ScriptEngine::load(
+            &script,
+            Graphics::new(SharedScreen::new()),
+            Input::new(SharedInput::default()),
+        )
+        .unwrap();
         engine.frame().unwrap();
         for invalid in [
             r#"{"name":"Example"}"#,
@@ -168,9 +176,13 @@ mod tests {
             end
         "#;
 
-        let engine =
-            ScriptEngine::from_source(script, "test.lua", screen.clone(), SharedInput::default())
-                .unwrap();
+        let engine = ScriptEngine::from_source(
+            script,
+            "test.lua",
+            Graphics::new(screen.clone()),
+            Input::new(SharedInput::default()),
+        )
+        .unwrap();
 
         engine.setup().unwrap();
         {
@@ -179,14 +191,73 @@ mod tests {
             assert_eq!(s.get_pixel(5, 6), Some(Color::RGBA(255, 0, 0, 255)));
         }
 
+        screen.0.borrow_mut().begin_frame();
         engine.frame().unwrap();
+        screen.0.borrow_mut().publish_frame();
+        {
+            let s = screen.0.borrow();
+            assert_eq!(s.displayed_rows().nth(6).unwrap()[5], 0x7c00);
+            assert_eq!(s.displayed_rows().nth(10).unwrap()[0], 0x03e0);
+        }
+        screen.0.borrow_mut().begin_frame();
         engine.frame().unwrap();
+        screen.0.borrow_mut().publish_frame();
+        {
+            let s = screen.0.borrow();
+            let row = s.displayed_rows().nth(10).unwrap();
+            assert_eq!(&row[..3], &[0x03e0, 0x03e0, 0x001f]);
+        }
         {
             let s = screen.0.borrow();
             assert_eq!(s.get_pixel(0, 10), Some(Color::RGBA(0, 255, 0, 255)));
             assert_eq!(s.get_pixel(1, 10), Some(Color::RGBA(0, 255, 0, 255)));
             assert_eq!(s.get_pixel(2, 10), Some(Color::RGBA(0, 0, 255, 255)));
         }
+    }
+
+    #[test]
+    fn failed_callbacks_do_not_publish_partial_frames() {
+        for callback in ["update", "draw"] {
+            let screen = SharedScreen::new();
+            let script = format!(
+                "function setup() graphics:set_pixel(0, 0, 0x7c00) end\n\
+                 function {callback}() graphics:set_pixel(0, 0, 0x03e0); error('failed') end"
+            );
+            let engine = ScriptEngine::from_source(
+                &script,
+                "test.lua",
+                Graphics::new(screen.clone()),
+                Input::new(SharedInput::default()),
+            )
+            .unwrap();
+            engine.setup().unwrap();
+            screen.0.borrow_mut().begin_frame();
+            assert!(engine.frame().is_err());
+            assert_eq!(
+                screen.0.borrow().displayed_rows().next().unwrap()[0],
+                0x7c00
+            );
+        }
+    }
+
+    #[test]
+    fn missing_frame_callbacks_still_publish_setup() {
+        let screen = SharedScreen::new();
+        let engine = ScriptEngine::from_source(
+            "function setup() graphics:set_pixel(0, 0, 0x7c00) end",
+            "test.lua",
+            Graphics::new(screen.clone()),
+            Input::new(SharedInput::default()),
+        )
+        .unwrap();
+        engine.setup().unwrap();
+        screen.0.borrow_mut().begin_frame();
+        engine.frame().unwrap();
+        screen.0.borrow_mut().publish_frame();
+        assert_eq!(
+            screen.0.borrow().displayed_rows().next().unwrap()[0],
+            0x7c00
+        );
     }
 
     #[test]
@@ -212,9 +283,13 @@ mod tests {
                 assert(first:released("left") == (frame == 1))
             end
         "#;
-        let engine =
-            ScriptEngine::from_source(script, "released.lua", SharedScreen::new(), input.clone())
-                .unwrap();
+        let engine = ScriptEngine::from_source(
+            script,
+            "released.lua",
+            Graphics::new(SharedScreen::new()),
+            Input::new(input.clone()),
+        )
+        .unwrap();
         engine.setup().unwrap();
         input.0.borrow_mut()[0].set(Button::Left, false, true);
         input.0.borrow_mut()[0].set(Button::Left, false, false);
@@ -252,9 +327,13 @@ mod tests {
                 assert(first:pressed("left") == (frame == 1))
             end
         "#;
-        let engine =
-            ScriptEngine::from_source(script, "input.lua", SharedScreen::new(), input.clone())
-                .unwrap();
+        let engine = ScriptEngine::from_source(
+            script,
+            "input.lua",
+            Graphics::new(SharedScreen::new()),
+            Input::new(input.clone()),
+        )
+        .unwrap();
         engine.setup().unwrap();
         input.0.borrow_mut()[0].set(Button::Left, false, true);
         input.0.borrow_mut()[1].set(Button::South, true, true);

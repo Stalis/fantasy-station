@@ -9,8 +9,18 @@ local colors = {
 }
 local indicators = {"l1", "start", "r1", "l2", "select", "r2"}
 local held = {}
+local checker
 
 function setup()
+    checker = graphics:new_texture(32, 32)
+    checker:fill(0x7fff)
+    for row = 0, 31 do
+        for col = 0, 31 do
+            if (row + col) % 2 == 0 then
+                checker:set_pixel(col, row, 0x4210)
+            end
+        end
+    end
     graphics:fill(0x0843)
 end
 
@@ -35,6 +45,7 @@ end
 function draw()
     graphics:fill(0x0843)
     graphics:circle(x, y, 12, color)
+    graphics:circle_texture(x, y, 10, checker, "repeat")
 
     for i in ipairs(indicators) do
         if held[i] then
